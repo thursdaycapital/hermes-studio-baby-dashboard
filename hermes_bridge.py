@@ -22,7 +22,7 @@ import tty
 from pathlib import Path
 from typing import Any
 
-SERVER_INFO = {"name": "quote0-baby", "version": "1.2.0"}
+SERVER_INFO = {"name": "quote0-baby", "version": "1.2.1"}
 DISCOVERY_PORT = 4210
 TOKEN_PATH = Path(__file__).with_name(".quote0-token")
 DEFAULT_FEED_INTERVAL_MINUTES = 180
