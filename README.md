@@ -8,6 +8,31 @@
 一个开源、本地优先的 Quote/0 墨水屏宝宝照护看板。手机通过局域网记录
 喂奶、睡眠和尿布，设备同步显示状态、趋势与提醒，不依赖官方云服务。
 
+## 项目状态：公开 Beta / Project status: Public Beta
+
+> 这是社区开发的独立开源固件，不是 MindReset 官方产品，也不是医疗器械。
+
+当前版本适合少量愿意测试、能够自行刷机或由熟悉 ESP32 的朋友协助安装的
+用户，尚不建议在缺少技术支持的情况下大规模分发给普通家庭。使用前请了解：
+
+- 原厂设备第一次安装需要通过 USB 执行完整的 `idf.py flash`；Release 中的
+  `quote0_baby.bin` 只适合已安装本项目后的 OTA 升级。
+- 改刷前应自行备份原厂固件；本仓库不分发原厂镜像，也不保证可以恢复原厂服务。
+- 当前恢复热点使用公开默认密码 `baby1234`，局域网令牌由设备 MAC 推导，
+  因此只能在可信的家庭网络中使用，不应暴露到公网或访客网络。
+- 所有设备默认使用 `quote0-baby.local`。同一局域网内运行多台设备可能出现
+  主机名冲突，Hermes 自动发现也可能选错设备。
+- 设备端仅保存最近 32 条历史记录；请定期导出 JSON，并妥善保管宝宝数据。
+- 当前主要在一台 Quote/0 真机上验证，尚未覆盖所有硬件批次、路由器和长期运行场景。
+- 看板仅用于日常照护记录，不能替代儿科医生、专业喂养建议或紧急医疗服务。
+
+English summary: this is independent public-beta firmware for technical early
+adopters. First installation requires a full USB flash, security assumes a
+trusted private LAN, one device per LAN is recommended, only 32 device records
+are retained, and hardware/router coverage is still limited. Back up the
+factory firmware and baby data before use. Do not use the dashboard for medical
+diagnosis or emergency decisions.
+
 ![Quote/0 宝宝看板实机运行效果](docs/quote0-baby-dashboard.jpg)
 
 ### 局域网网页看板 / Local web dashboard
