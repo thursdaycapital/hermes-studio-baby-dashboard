@@ -13,9 +13,9 @@
 ### 局域网网页看板 / Local web dashboard
 
 手机或电脑连接同一 Wi-Fi 后，可以记录喂奶、睡眠和尿布，查看历史记录与
-多日趋势，并设置喂奶及疫苗提醒。
+多日趋势，设置喂奶及疫苗提醒，并导出或恢复本地数据备份。
 
-![Hermes Studio 宝宝看板网页界面](docs/web-dashboard.webp)
+![Hermes Studio 宝宝看板与数据备份界面](docs/web-dashboard.webp)
 
 Local-first custom firmware for the MindReset Quote/0:
 
