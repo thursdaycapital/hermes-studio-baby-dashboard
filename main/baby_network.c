@@ -75,6 +75,7 @@ static esp_err_t send_json(httpd_req_t *request, const char *body)
 {
     httpd_resp_set_type(request, "application/json; charset=utf-8");
     httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(request, "Connection", "close");
     return httpd_resp_sendstr(request, body);
 }
 
@@ -715,10 +716,10 @@ static esp_err_t root_handler(httpd_req_t *request)
         "{method:'POST',body:c});return r.json()}"
         "async function send(c){try{let j=await cmd(c);let m=j.response||'';"
         "toast(m.startsWith('OK')||m.startsWith('STATE')?'✅ 已保存':'⚠️ '+m);"
-        "if(m.startsWith('OK')||m.startsWith('STATE')){refresh();loadHist();loadChart()}}"
+        "if(m.startsWith('OK')||m.startsWith('STATE')){await refresh();await loadHist();await loadChart()}}"
         "catch(e){toast('连接失败',1)}}"
         "async function refresh(){try{let j=await cmd('STATUS'),raw=j.response||'';"
-        "if(lastStatus&&lastStatus!==raw){loadHist();loadChart()}lastStatus=raw;"
+        "if(lastStatus&&lastStatus!==raw){await loadHist();await loadChart()}lastStatus=raw;"
         "const s={};j.response.replace(/\\b(\\w+)=([^\\s]+)/g,(_,k,v)=>s[k]=v);"
         "document.getElementById('dot').className='dot';"
         "const sy=document.getElementById('sync');sy.className='sync';"
@@ -814,15 +815,17 @@ static esp_err_t root_handler(httpd_req_t *request)
         "try{const body=await f.text(),r=await fetch('/api/restore?token='+token,{method:'POST',"
         "headers:{'Content-Type':'application/json'},body}),j=await r.json();"
         "if(!r.ok||!j.ok)throw Error(j.message||'恢复失败');toast('✅ '+j.message);"
-        "lastStatus='';refresh();loadHist();loadChart()}catch(err){toast(err.message||'恢复失败',1)}"
+        "lastStatus='';await refresh();await loadHist();await loadChart()}catch(err){toast(err.message||'恢复失败',1)}"
         "e.target.value=''};"
         "if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});"
         "document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});"
-        "refresh();loadChart();loadHist();setInterval(()=>{if(!document.hidden)refresh()},4000);"
+        "async function syncAll(){await refresh();await loadChart();await loadHist()}syncAll();"
+        "setInterval(()=>{if(!document.hidden)refresh()},4000);"
         "setInterval(loadChart,60000);"
         "</script></body></html>",
         access_token);
     httpd_resp_set_type(request, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(request, "Connection", "close");
     return httpd_resp_sendstr(request, page);
 }
 
@@ -831,6 +834,8 @@ static httpd_handle_t start_http_server(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
     config.max_uri_handlers = 14;
+    config.max_open_sockets = 4;
+    config.lru_purge_enable = true;
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &config) != ESP_OK) return NULL;
 
