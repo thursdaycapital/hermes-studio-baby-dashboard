@@ -326,10 +326,10 @@ Hermes 可以调用 11 个宝宝记录、状态、统计和提醒工具。它是
 Release 下载的 `quote0_baby.bin`，再点击“上传并更新固件”。网页会显示上传进度，
 成功后设备自动重启。手机与设备需连接同一个局域网，整个过程不需要数据线。
 
-更简单的方法是点击“从 GitHub 在线更新”。手机浏览器会通过 HTTPS 直接读取本仓库
-`main/docs/firmware/quote0_baby.bin`，随后自动上传到设备；设备验证固件后写入备用 OTA
+更简单的方法是点击“从 GitHub 在线更新”。手机浏览器会通过 GitHub Contents API
+直接读取本仓库 `main/docs/firmware/quote0_baby.bin`，随后自动上传到设备；设备验证固件后写入备用 OTA
 分区并重启。这样可以避开 Release 附件的跨域限制，以及部分网络会重置 ESP32 到
-GitHub 的 TLS 连接。手机必须同时能访问互联网和设备所在局域网。
+GitHub 的 TLS 连接，也避免 Raw 分支文件的短时缓存。手机必须同时能访问互联网和设备所在局域网。
 
 也可以从命令行升级：
 
