@@ -20,6 +20,7 @@
 #include "freertos/task.h"
 #include "lwip/inet.h"
 #include "lwip/sockets.h"
+#include "mdns.h"
 #include "nvs.h"
 
 /* 页面大缓冲区的 format-truncation 是保守误报（snprintf 运行时正确截断） */
@@ -35,6 +36,8 @@ static void json_escape(char *out, size_t size, const char *in);
 static const char *TAG = "baby_network";
 static EventGroupHandle_t wifi_events;
 static baby_command_handler_t command_handler;
+static baby_backup_export_handler_t backup_export_handler;
+static baby_backup_import_handler_t backup_import_handler;
 static char access_token[20];
 static char ap_name[32];
 static int retry_count;
@@ -47,6 +50,7 @@ static bool recovery_ap_started;
 static char command_response[2048];
 static char command_escaped[2300];
 static char command_json[2400];
+static char backup_response[6144];
 
 static bool request_authorized(httpd_req_t *request)
 {
@@ -234,7 +238,7 @@ static esp_err_t ota_http_handler(httpd_req_t *request)
 
 static esp_err_t ping_handler(httpd_req_t *request)
 {
-    return send_json(request, "{\"device\":\"QUOTE0_BABY\",\"version\":3}");
+    return send_json(request, "{\"device\":\"QUOTE0_BABY\",\"version\":4}");
 }
 
 static esp_err_t command_http_handler(httpd_req_t *request)
@@ -265,6 +269,123 @@ static esp_err_t command_http_handler(httpd_req_t *request)
              err == ESP_OK ? "true" : "false", command_escaped);
     if (err != ESP_OK) httpd_resp_set_status(request, "400 Bad Request");
     return send_json(request, command_json);
+}
+
+static esp_err_t backup_export_http_handler(httpd_req_t *request)
+{
+    if (!request_authorized(request)) {
+        httpd_resp_set_status(request, "401 Unauthorized");
+        return send_json(request, "{\"error\":\"unauthorized\"}");
+    }
+    esp_err_t err = backup_export_handler(backup_response,
+                                          sizeof(backup_response));
+    if (err != ESP_OK) {
+        httpd_resp_set_status(request, "500 Internal Server Error");
+        return send_json(request, "{\"error\":\"backup_failed\"}");
+    }
+    httpd_resp_set_type(request, "application/json; charset=utf-8");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(request, "Content-Disposition",
+                       "attachment; filename=quote0-baby-backup.json");
+    return httpd_resp_sendstr(request, backup_response);
+}
+
+static esp_err_t backup_import_http_handler(httpd_req_t *request)
+{
+    if (!request_authorized(request)) {
+        httpd_resp_set_status(request, "401 Unauthorized");
+        return send_json(request, "{\"error\":\"unauthorized\"}");
+    }
+    if (request->content_len <= 0 || request->content_len > 8192) {
+        httpd_resp_set_status(request, "413 Content Too Large");
+        return send_json(request, "{\"error\":\"invalid_backup_size\"}");
+    }
+    char *body = malloc((size_t)request->content_len + 1);
+    if (!body) {
+        httpd_resp_set_status(request, "503 Service Unavailable");
+        return send_json(request, "{\"error\":\"no_memory\"}");
+    }
+    int total = 0;
+    while (total < request->content_len) {
+        int received = httpd_req_recv(request, body + total,
+                                      request->content_len - total);
+        if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (received <= 0) {
+            free(body);
+            httpd_resp_set_status(request, "400 Bad Request");
+            return send_json(request, "{\"error\":\"read_failed\"}");
+        }
+        total += received;
+    }
+    body[total] = '\0';
+    char result[160] = {0};
+    esp_err_t err = backup_import_handler(body, (size_t)total, result,
+                                          sizeof(result));
+    free(body);
+    char escaped[220] = {0};
+    json_escape(escaped, sizeof(escaped), result);
+    snprintf(command_json, sizeof(command_json),
+             "{\"ok\":%s,\"message\":\"%s\"}",
+             err == ESP_OK ? "true" : "false", escaped);
+    if (err != ESP_OK) httpd_resp_set_status(request, "400 Bad Request");
+    return send_json(request, command_json);
+}
+
+static esp_err_t manifest_handler(httpd_req_t *request)
+{
+    httpd_resp_set_type(request, "application/manifest+json; charset=utf-8");
+    httpd_resp_set_hdr(request, "Cache-Control", "public, max-age=86400");
+    return httpd_resp_sendstr(request,
+        "{\"name\":\"Hermes Studio 喂养宝宝\","
+        "\"short_name\":\"宝宝记录\",\"lang\":\"zh-CN\","
+        "\"start_url\":\"/\",\"scope\":\"/\","
+        "\"display\":\"standalone\",\"background_color\":\"#e9efda\","
+        "\"theme_color\":\"#547b5f\",\"icons\":[{\"src\":\"/icon.svg\","
+        "\"sizes\":\"any\",\"type\":\"image/svg+xml\","
+        "\"purpose\":\"any maskable\"}]}");
+}
+
+static esp_err_t icon_handler(httpd_req_t *request)
+{
+    httpd_resp_set_type(request, "image/svg+xml");
+    httpd_resp_set_hdr(request, "Cache-Control", "public, max-age=86400");
+    return httpd_resp_sendstr(request,
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'>"
+        "<rect width='192' height='192' rx='42' fill='#e9efda'/>"
+        "<circle cx='96' cy='92' r='58' fill='#fffaf0' stroke='#547b5f' stroke-width='8'/>"
+        "<path d='M54 75Q64 34 96 42Q134 34 140 78Q126 62 112 68Q91 52 72 70Z' fill='#29483a'/>"
+        "<circle cx='76' cy='94' r='7' fill='#29483a'/><circle cx='116' cy='94' r='7' fill='#29483a'/>"
+        "<path d='M79 119Q96 132 113 119' fill='none' stroke='#d8896c' stroke-width='7' stroke-linecap='round'/>"
+        "</svg>");
+}
+
+static esp_err_t offline_handler(httpd_req_t *request)
+{
+    httpd_resp_set_type(request, "text/html; charset=utf-8");
+    return httpd_resp_sendstr(request,
+        "<!doctype html><html lang=zh-CN><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<meta name=theme-color content='#547b5f'>"
+        "<meta name=apple-mobile-web-app-capable content=yes>"
+        "<meta name=apple-mobile-web-app-title content='宝宝记录'>"
+        "<link rel=manifest href='/manifest.webmanifest'>"
+        "<link rel=apple-touch-icon href='/icon.svg'>"
+        "<title>宝宝看板离线</title><body style='font-family:serif;background:#e9efda;"
+        "color:#29483a;padding:12vh 8vw;text-align:center'><h1>暂时连不上宝宝看板</h1>"
+        "<p>请确认手机与 Quote/0 连接同一个 Wi-Fi，然后重新打开。</p></body></html>");
+}
+
+static esp_err_t service_worker_handler(httpd_req_t *request)
+{
+    httpd_resp_set_type(request, "application/javascript; charset=utf-8");
+    httpd_resp_set_hdr(request, "Cache-Control", "no-cache");
+    return httpd_resp_sendstr(request,
+        "const C='quote0-baby-shell-v1';"
+        "self.addEventListener('install',e=>e.waitUntil(caches.open(C).then(c=>"
+        "c.addAll(['/offline','/manifest.webmanifest','/icon.svg']))));"
+        "self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));"
+        "self.addEventListener('fetch',e=>{if(e.request.mode==='navigate')"
+        "e.respondWith(fetch(e.request).catch(()=>caches.match('/offline')))});");
 }
 
 static int hex_value(char value)
@@ -397,6 +518,11 @@ static esp_err_t root_handler(httpd_req_t *request)
     snprintf(page, sizeof(page),
         "<!doctype html><html lang=zh-CN><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<meta name=theme-color content='#547b5f'>"
+        "<meta name=apple-mobile-web-app-capable content=yes>"
+        "<meta name=apple-mobile-web-app-title content='宝宝记录'>"
+        "<link rel=manifest href='/manifest.webmanifest'>"
+        "<link rel=apple-touch-icon href='/icon.svg'>"
         "<title>Hermes Studio 喂养宝宝</title><style>"
         "*{margin:0;padding:0;box-sizing:border-box}"
         ":root{--ink:#29483a;--leaf:#547b5f;--moss:#87a77d;--sky:#ddecdf;"
@@ -421,6 +547,7 @@ static esp_err_t root_handler(httpd_req_t *request)
         ".dot{width:11px;height:11px;border-radius:50%%;background:#4f8d57;"
         "box-shadow:0 0 0 5px #4f8d5725;margin-left:auto}"
         ".dot.off{background:#bd695b;box-shadow:0 0 0 5px #bd695b25}"
+        ".sync{font-size:12px;color:#66846b;white-space:nowrap}.sync.off{color:#a45d52}"
         ".layout{display:grid;grid-template-columns:minmax(0,.95fr) minmax(0,1.05fr);"
         "gap:18px;align-items:start}"
         ".pane{min-width:0}"
@@ -494,6 +621,9 @@ static esp_err_t root_handler(httpd_req_t *request)
         "text-overflow:ellipsis;white-space:nowrap}.net .lock{font-size:12px}"
         ".wifi-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}"
         ".wifi-head span{font-size:12px;color:#6d826f}"
+        ".backup-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}"
+        ".backup-actions .btn{margin:0}.hint{font-size:12px;line-height:1.7;color:#6d826f;"
+        "margin-top:10px}"
         "@media(max-width:820px){body{padding:12px}header{height:58px;margin-bottom:10px}"
         "h1{font-size:20px;letter-spacing:0}header:after{display:none}"
         ".logo{width:44px;height:44px;flex-basis:44px}"
@@ -504,7 +634,8 @@ static esp_err_t root_handler(httpd_req_t *request)
         "</style></head><body><div class=wrap>"
         "<header><img class=logo alt='Hermes Studio 宠物' src='data:image/webp;base64,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'>"
         "<h1>Hermes Studio 喂养宝宝</h1>"
-        "<div class=dot id=dot></div></header><main class=layout><section class='pane left'>"
+        "<div class=dot id=dot></div><span class=sync id=sync>正在同步</span></header>"
+        "<main class=layout><section class='pane left'>"
         "<div class=card><h2>实时状态</h2><div class=grid id=stats>"
         "<div class=stat><div class=k>出生天数</div><div class=v id=s-day>--</div></div>"
         "<div class=stat><div class=k>最近喂奶</div><div class=v id=s-feed>--:--</div></div>"
@@ -561,7 +692,14 @@ static esp_err_t root_handler(httpd_req_t *request)
         "<label>Wi-Fi 名称</label><input id=ssid readonly>"
         "<label>密码</label><input id=wpass type=password placeholder='输入密码'>"
         "<button class='btn b' type=submit>连接此网络</button></form>"
-        "</div></details></section></main>"
+        "</div></details>"
+        "<details class=card><summary class=fold>数据备份</summary><div>"
+        "<div class=backup-actions><button class='btn t' onclick='downloadBackup()'>"
+        "⬇️ 导出备份</button><button class='btn y' onclick=\"document.getElementById('restoreFile').click()\">"
+        "⬆️ 恢复备份</button></div>"
+        "<input id=restoreFile type=file accept='.json,application/json' style='display:none'>"
+        "<p class=hint>备份包含当前状态、喂奶间隔与最近 32 条记录。恢复前会完整校验文件，"
+        "成功后自动刷新墨水屏。</p></div></details></section></main>"
         "</div><div id=toast></div><script>"
         "const token='%s';"
         "function now(){return new Date().toTimeString().slice(0,5)}"
@@ -572,16 +710,19 @@ static esp_err_t root_handler(httpd_req_t *request)
         "const M={ml:{name:'奶量趋势',unit:'ml',i:1},feed:{name:'喂奶次数',unit:'次',i:2},"
         "diaper:{name:'尿布次数',unit:'次',i:3},poop:{name:'便便次数',unit:'次',i:4},"
         "sleep:{name:'睡眠时长',unit:'分钟',i:5}};"
-        "let chartDays=1,chartMetric='ml',chartData=[];"
+        "let chartDays=1,chartMetric='ml',chartData=[],lastStatus='';"
         "async function cmd(c){let r=await fetch('/api/command?token='+token,"
         "{method:'POST',body:c});return r.json()}"
         "async function send(c){try{let j=await cmd(c);let m=j.response||'';"
         "toast(m.startsWith('OK')||m.startsWith('STATE')?'✅ 已保存':'⚠️ '+m);"
         "if(m.startsWith('OK')||m.startsWith('STATE')){refresh();loadHist();loadChart()}}"
         "catch(e){toast('连接失败',1)}}"
-        "async function refresh(){try{let j=await cmd('STATUS');"
+        "async function refresh(){try{let j=await cmd('STATUS'),raw=j.response||'';"
+        "if(lastStatus&&lastStatus!==raw){loadHist();loadChart()}lastStatus=raw;"
         "const s={};j.response.replace(/\\b(\\w+)=([^\\s]+)/g,(_,k,v)=>s[k]=v);"
         "document.getElementById('dot').className='dot';"
+        "const sy=document.getElementById('sync');sy.className='sync';"
+        "sy.textContent='已同步 '+now();"
         "document.getElementById('s-day').textContent='第 '+s.DAY+' 天';"
         "const[fT,fM]=s.FEED.split('/');"
         "document.getElementById('s-feed').textContent=fT+' · '+fM+'ml';"
@@ -596,7 +737,8 @@ static esp_err_t root_handler(httpd_req_t *request)
         "if(s.REMIND&&s.REMIND!=='-'&&s.REMIND!==''){const[d,rt]=s.REMIND.split('/');"
         "tag.className='tag pink';tag.textContent='💉 '+d+' '+rt+' 打预防针'}"
         "else{tag.className='tag blue';tag.textContent=(L[nL]||nL)+' 提醒'}"
-        "}catch(e){document.getElementById('dot').className='dot off'}}"
+        "}catch(e){document.getElementById('dot').className='dot off';"
+        "const sy=document.getElementById('sync');sy.className='sync off';sy.textContent='等待连接'}}"
         "async function loadSummary(){try{let j=await cmd('SUMMARY');"
         "document.getElementById('summary').textContent=j.response||'--'}"
         "catch(e){document.getElementById('summary').textContent='--'}}"
@@ -662,7 +804,21 @@ static esp_err_t root_handler(httpd_req_t *request)
         "try{let r=await fetch('/api/wifi?token='+token,{method:'POST',body:new "
         "URLSearchParams(fd)});let t=await r.text();toast(t||'已保存，正在连接...');"
         "}catch(e){toast('提交失败',1)}};"
-        "refresh();loadChart();loadHist();setInterval(refresh,15000);"
+        "async function downloadBackup(){try{const r=await fetch('/api/backup?token='+token);"
+        "if(!r.ok)throw Error();const blob=await r.blob(),a=document.createElement('a');"
+        "a.href=URL.createObjectURL(blob);a.download='quote0-baby-'+new Date().toISOString().slice(0,10)+'.json';"
+        "a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);toast('✅ 备份已导出')}"
+        "catch(e){toast('备份导出失败',1)}}"
+        "document.getElementById('restoreFile').onchange=async e=>{const f=e.target.files[0];"
+        "if(!f)return;if(!confirm('恢复会覆盖设备上的当前状态和历史记录，确定继续吗？')){e.target.value='';return}"
+        "try{const body=await f.text(),r=await fetch('/api/restore?token='+token,{method:'POST',"
+        "headers:{'Content-Type':'application/json'},body}),j=await r.json();"
+        "if(!r.ok||!j.ok)throw Error(j.message||'恢复失败');toast('✅ '+j.message);"
+        "lastStatus='';refresh();loadHist();loadChart()}catch(err){toast(err.message||'恢复失败',1)}"
+        "e.target.value=''};"
+        "if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});"
+        "document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});"
+        "refresh();loadChart();loadHist();setInterval(()=>{if(!document.hidden)refresh()},4000);"
         "setInterval(loadChart,60000);"
         "</script></body></html>",
         access_token);
@@ -696,6 +852,22 @@ static httpd_handle_t start_http_server(void)
         .handler = wifi_scan_result_handler};
     const httpd_uri_t ota = {
         .uri = "/api/ota", .method = HTTP_POST, .handler = ota_http_handler};
+    const httpd_uri_t backup = {
+        .uri = "/api/backup", .method = HTTP_GET,
+        .handler = backup_export_http_handler};
+    const httpd_uri_t restore = {
+        .uri = "/api/restore", .method = HTTP_POST,
+        .handler = backup_import_http_handler};
+    const httpd_uri_t manifest = {
+        .uri = "/manifest.webmanifest", .method = HTTP_GET,
+        .handler = manifest_handler};
+    const httpd_uri_t icon = {
+        .uri = "/icon.svg", .method = HTTP_GET, .handler = icon_handler};
+    const httpd_uri_t offline = {
+        .uri = "/offline", .method = HTTP_GET, .handler = offline_handler};
+    const httpd_uri_t service_worker = {
+        .uri = "/sw.js", .method = HTTP_GET,
+        .handler = service_worker_handler};
     httpd_register_uri_handler(server, &root);
     httpd_register_uri_handler(server, &ping);
     httpd_register_uri_handler(server, &command);
@@ -703,6 +875,12 @@ static httpd_handle_t start_http_server(void)
     httpd_register_uri_handler(server, &wifiscan);
     httpd_register_uri_handler(server, &wifiscanresult);
     httpd_register_uri_handler(server, &ota);
+    httpd_register_uri_handler(server, &backup);
+    httpd_register_uri_handler(server, &restore);
+    httpd_register_uri_handler(server, &manifest);
+    httpd_register_uri_handler(server, &icon);
+    httpd_register_uri_handler(server, &offline);
+    httpd_register_uri_handler(server, &service_worker);
     return server;
 }
 
@@ -823,9 +1001,16 @@ static void start_station(const char *ssid, const char *password)
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
-esp_err_t baby_network_start(baby_command_handler_t handler)
+esp_err_t baby_network_start(baby_command_handler_t handler,
+                             baby_backup_export_handler_t export_handler,
+                             baby_backup_import_handler_t import_handler)
 {
+    if (!handler || !export_handler || !import_handler) {
+        return ESP_ERR_INVALID_ARG;
+    }
     command_handler = handler;
+    backup_export_handler = export_handler;
+    backup_import_handler = import_handler;
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     snprintf(access_token, sizeof(access_token), "Q0%02X%02X%02X%02X",
@@ -851,6 +1036,12 @@ esp_err_t baby_network_start(baby_command_handler_t handler)
     } else {
         start_access_point();
     }
+
+    ESP_ERROR_CHECK(mdns_init());
+    ESP_ERROR_CHECK(mdns_hostname_set("quote0-baby"));
+    ESP_ERROR_CHECK(mdns_instance_name_set("Hermes Studio Baby Dashboard"));
+    ESP_ERROR_CHECK(mdns_service_add("宝宝看板", "_http", "_tcp", 80,
+                                     NULL, 0));
 
     start_http_server();
     xTaskCreate(discovery_task, "quote0_discovery", 3072, NULL, 4, NULL);

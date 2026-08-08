@@ -13,6 +13,7 @@
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
 #include "baby_network.h"
+#include "cJSON.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -329,7 +330,7 @@ static void draw_dashboard(void)
 
 static esp_err_t save_state(void)
 {
-    nvs_handle_t handle;
+    nvs_handle_t handle = 0;
     esp_err_t err = nvs_open("baby", NVS_READWRITE, &handle);
     if (err != ESP_OK) return err;
     err = nvs_set_blob(handle, "state", &state, sizeof(state));
@@ -738,6 +739,262 @@ static esp_err_t refresh_display(void)
     return err;
 }
 
+static bool backup_string(const cJSON *object, const char *key,
+                          char *destination, size_t size)
+{
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, key);
+    if (!cJSON_IsString(item) || !item->valuestring ||
+        strlen(item->valuestring) >= size) {
+        return false;
+    }
+    snprintf(destination, size, "%s", item->valuestring);
+    return true;
+}
+
+static bool backup_integer(const cJSON *object, const char *key,
+                           int minimum, int maximum, int *value)
+{
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, key);
+    if (!cJSON_IsNumber(item) || item->valuedouble != item->valueint ||
+        item->valueint < minimum || item->valueint > maximum) {
+        return false;
+    }
+    *value = item->valueint;
+    return true;
+}
+
+static bool backup_time(const char *value, bool allow_placeholder)
+{
+    if (allow_placeholder && strcmp(value, "--:--") == 0) return true;
+    int hour = -1, minute = -1;
+    char extra = '\0';
+    return strlen(value) == 5 &&
+           sscanf(value, "%2d:%2d%c", &hour, &minute, &extra) == 2 &&
+           hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
+}
+
+static bool backup_date(const char *value, bool allow_empty)
+{
+    if (allow_empty && value[0] == '\0') return true;
+    int month = -1, day = -1;
+    char extra = '\0';
+    return strlen(value) == 5 &&
+           sscanf(value, "%2d-%2d%c", &month, &day, &extra) == 2 &&
+           month >= 1 && month <= 12 && day >= 1 && day <= 31;
+}
+
+static esp_err_t export_backup(char *response, size_t response_size)
+{
+    if (!response || response_size == 0) return ESP_ERR_INVALID_ARG;
+    if (xSemaphoreTake(command_mutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *saved_state = cJSON_CreateObject();
+    cJSON *entries = cJSON_CreateArray();
+    if (!root || !saved_state || !entries) goto no_memory;
+    cJSON_AddNumberToObject(root, "schema", 1);
+    cJSON_AddStringToObject(root, "device", "QUOTE0_BABY");
+    cJSON_AddItemToObject(root, "state", saved_state);
+    cJSON_AddNumberToObject(saved_state, "day", state.day);
+    cJSON_AddStringToObject(saved_state, "feedTime", state.feed_time);
+    cJSON_AddNumberToObject(saved_state, "feedMl", state.feed_ml);
+    cJSON_AddStringToObject(saved_state, "diaperTime", state.diaper_time);
+    cJSON_AddStringToObject(saved_state, "diaperCode", state.diaper_code);
+    cJSON_AddStringToObject(saved_state, "sleepTime", state.sleep_time);
+    cJSON_AddStringToObject(saved_state, "sleepState", state.sleep_state);
+    cJSON_AddStringToObject(saved_state, "nextTime", state.next_time);
+    cJSON_AddStringToObject(saved_state, "nextLabel", state.next_label);
+    cJSON_AddNumberToObject(saved_state, "dayAnchor", state.day_anchor_date);
+    cJSON_AddStringToObject(saved_state, "reminderDate", state.reminder_date);
+    cJSON_AddStringToObject(saved_state, "reminderTime", state.reminder_time);
+    cJSON_AddNumberToObject(root, "feedInterval", history_get_interval());
+    cJSON_AddItemToObject(root, "history", entries);
+
+    if (history.magic == 0x48495354U) {
+        int first = (history.head + HISTORY_MAX - history.count) % HISTORY_MAX;
+        for (int i = 0; i < history.count; i++) {
+            baby_history_entry_t *entry =
+                &history.entries[(first + i) % HISTORY_MAX];
+            cJSON *item = cJSON_CreateObject();
+            if (!item) goto no_memory;
+            cJSON_AddStringToObject(item, "date", entry->date);
+            cJSON_AddStringToObject(item, "time", entry->time);
+            cJSON_AddStringToObject(item, "kind", entry->kind);
+            cJSON_AddStringToObject(item, "value", entry->value);
+            cJSON_AddItemToArray(entries, item);
+        }
+    }
+
+    char *json = cJSON_PrintUnformatted(root);
+    if (!json) goto no_memory;
+    if (strlen(json) + 1 > response_size) {
+        cJSON_free(json);
+        cJSON_Delete(root);
+        xSemaphoreGive(command_mutex);
+        return ESP_ERR_INVALID_SIZE;
+    }
+    snprintf(response, response_size, "%s", json);
+    cJSON_free(json);
+    cJSON_Delete(root);
+    xSemaphoreGive(command_mutex);
+    return ESP_OK;
+
+no_memory:
+    cJSON_Delete(root);
+    xSemaphoreGive(command_mutex);
+    return ESP_ERR_NO_MEM;
+}
+
+static esp_err_t import_backup(const char *backup, size_t backup_size,
+                               char *response, size_t response_size)
+{
+    if (!backup || backup_size == 0 || !response || response_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    cJSON *root = cJSON_ParseWithLength(backup, backup_size);
+    if (!root) {
+        snprintf(response, response_size, "备份文件不是有效 JSON");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    baby_state_t imported = state;
+    baby_history_t imported_history = {
+        .magic = 0x48495354U, .count = 0, .head = 0};
+    int schema = 0, day = 0, feed_ml = 0, anchor = 0, interval = 0;
+    const cJSON *saved_state =
+        cJSON_GetObjectItemCaseSensitive(root, "state");
+    const cJSON *entries = cJSON_GetObjectItemCaseSensitive(root, "history");
+    bool valid = backup_integer(root, "schema", 1, 1, &schema) &&
+                 cJSON_IsObject(saved_state) && cJSON_IsArray(entries) &&
+                 cJSON_GetArraySize(entries) <= HISTORY_MAX &&
+                 backup_integer(root, "feedInterval", 30, 720, &interval) &&
+                 backup_integer(saved_state, "day", 0, 999, &day) &&
+                 backup_integer(saved_state, "feedMl", 0, 999, &feed_ml) &&
+                 backup_integer(saved_state, "dayAnchor", 0, INT32_MAX,
+                                &anchor) &&
+                 backup_string(saved_state, "feedTime", imported.feed_time,
+                               sizeof(imported.feed_time)) &&
+                 backup_string(saved_state, "diaperTime",
+                               imported.diaper_time,
+                               sizeof(imported.diaper_time)) &&
+                 backup_string(saved_state, "diaperCode",
+                               imported.diaper_code,
+                               sizeof(imported.diaper_code)) &&
+                 backup_string(saved_state, "sleepTime", imported.sleep_time,
+                               sizeof(imported.sleep_time)) &&
+                 backup_string(saved_state, "sleepState",
+                               imported.sleep_state,
+                               sizeof(imported.sleep_state)) &&
+                 backup_string(saved_state, "nextTime", imported.next_time,
+                               sizeof(imported.next_time)) &&
+                 backup_string(saved_state, "nextLabel", imported.next_label,
+                               sizeof(imported.next_label)) &&
+                 backup_string(saved_state, "reminderDate",
+                               imported.reminder_date,
+                               sizeof(imported.reminder_date)) &&
+                 backup_string(saved_state, "reminderTime",
+                               imported.reminder_time,
+                               sizeof(imported.reminder_time));
+    imported.day = (uint16_t)day;
+    imported.feed_ml = (uint16_t)feed_ml;
+    imported.day_anchor_date = anchor;
+    valid = valid && backup_time(imported.feed_time, true) &&
+            backup_time(imported.diaper_time, true) &&
+            backup_time(imported.sleep_time, true) &&
+            backup_time(imported.next_time, true) &&
+            (strcmp(imported.diaper_code, "-") == 0 ||
+             strcmp(imported.diaper_code, "W") == 0 ||
+             strcmp(imported.diaper_code, "D") == 0 ||
+             strcmp(imported.diaper_code, "WD") == 0) &&
+            (strcmp(imported.sleep_state, "ON") == 0 ||
+             strcmp(imported.sleep_state, "OFF") == 0) &&
+            (strcmp(imported.next_label, "FEED") == 0 ||
+             strcmp(imported.next_label, "SLEEP") == 0 ||
+             strcmp(imported.next_label, "DIAPER") == 0 ||
+             strcmp(imported.next_label, "MED") == 0) &&
+            backup_date(imported.reminder_date, true) &&
+            ((imported.reminder_date[0] == '\0' &&
+              imported.reminder_time[0] == '\0') ||
+             backup_time(imported.reminder_time, false));
+
+    const cJSON *item = NULL;
+    cJSON_ArrayForEach(item, entries) {
+        if (!valid || !cJSON_IsObject(item)) {
+            valid = false;
+            break;
+        }
+        baby_history_entry_t entry = {0};
+        valid = backup_string(item, "date", entry.date,
+                              sizeof(entry.date)) &&
+                backup_string(item, "time", entry.time,
+                              sizeof(entry.time)) &&
+                backup_string(item, "kind", entry.kind,
+                              sizeof(entry.kind)) &&
+                backup_string(item, "value", entry.value,
+                              sizeof(entry.value)) &&
+                backup_date(entry.date, false) &&
+                backup_time(entry.time, false);
+        if (!valid) break;
+        if (strcmp(entry.kind, "FEED") == 0) {
+            char *end = NULL;
+            long amount = strtol(entry.value, &end, 10);
+            valid = end && *end == '\0' && amount >= 0 && amount <= 999;
+        } else if (strcmp(entry.kind, "DIAP") == 0) {
+            valid = strcmp(entry.value, "W") == 0 ||
+                    strcmp(entry.value, "D") == 0 ||
+                    strcmp(entry.value, "WD") == 0;
+        } else if (strcmp(entry.kind, "SLEE") == 0) {
+            valid = strcmp(entry.value, "ON") == 0 ||
+                    strcmp(entry.value, "OFF") == 0;
+        } else {
+            valid = false;
+        }
+        if (!valid) break;
+        imported_history.entries[imported_history.count++] = entry;
+        imported_history.head = imported_history.count % HISTORY_MAX;
+    }
+    cJSON_Delete(root);
+    if (!valid) {
+        snprintf(response, response_size, "备份内容不完整或数据超出范围");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (xSemaphoreTake(command_mutex, pdMS_TO_TICKS(15000)) != pdTRUE) {
+        snprintf(response, response_size, "设备正忙，请稍后再试");
+        return ESP_ERR_TIMEOUT;
+    }
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open("baby", NVS_READWRITE, &handle);
+    if (err == ESP_OK) {
+        err = nvs_set_blob(handle, "state", &imported, sizeof(imported));
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_blob(handle, "history", &imported_history,
+                           sizeof(imported_history));
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u16(handle, "interval", (uint16_t)interval);
+    }
+    if (err == ESP_OK) err = nvs_commit(handle);
+    if (handle != 0) nvs_close(handle);
+    if (err == ESP_OK) {
+        state = imported;
+        history = imported_history;
+        err = refresh_display();
+    }
+    xSemaphoreGive(command_mutex);
+    if (err != ESP_OK) {
+        snprintf(response, response_size, "恢复失败：%s",
+                 esp_err_to_name(err));
+        return err;
+    }
+    snprintf(response, response_size, "已恢复 %u 条记录",
+             (unsigned)imported_history.count);
+    return ESP_OK;
+}
+
 static esp_err_t execute_command(const char *input,
                                  char *response, size_t response_size)
 {
@@ -946,7 +1203,8 @@ void app_main(void)
         ESP_LOGE(TAG, "Initial refresh failed: %s", esp_err_to_name(err));
         return;
     }
-    ESP_ERROR_CHECK(baby_network_start(execute_command));
+    ESP_ERROR_CHECK(baby_network_start(execute_command, export_backup,
+                                       import_backup));
     xTaskCreate(day_clock_task, "baby_day_clock", 4096, NULL, 4, NULL);
     printf("READY QUOTE0_BABY_V2\n");
 

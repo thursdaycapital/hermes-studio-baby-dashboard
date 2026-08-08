@@ -120,7 +120,15 @@ Setup page: http://192.168.4.1
 
 After saving the home Wi-Fi credentials, the device reboots onto the LAN. The
 Hermes bridge discovers it with a UDP broadcast and sends commands to the local
-HTTP API.
+HTTP API. On networks that support multicast DNS, the dashboard is also
+available at `http://quote0-baby.local/` even if the router changes its IP.
+
+The web dashboard checks for changes from other caregivers every four seconds
+while visible. It includes an installable web-app manifest and a versioned JSON
+backup/restore flow for the current state, feeding interval, and the latest 32
+device records. Backup files are validated completely before NVS is replaced.
+Because browsers require HTTPS for Service Worker storage, offline caching is
+not guaranteed when the dashboard is served over plain LAN HTTP.
 
 The hardware has no button, so recovery is automatic. If saved Wi-Fi
 credentials cannot connect, the firmware retries about 11 times and then opens
