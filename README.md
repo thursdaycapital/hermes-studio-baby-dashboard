@@ -1,5 +1,7 @@
 # Quote/0 Baby Dashboard
 
+[中文介绍与使用教程](docs/README.zh-CN.md) | English
+
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-5b7f63.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/thursdaycapital/quote0-baby-dashboard)](https://github.com/thursdaycapital/quote0-baby-dashboard/releases)
 
