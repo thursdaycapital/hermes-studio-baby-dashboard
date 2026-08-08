@@ -1,4 +1,4 @@
-# Quote/0 宝宝看板
+# hermes-studio 宝宝看板
 
 [返回项目首页](../README.md) | [下载最新固件](https://github.com/thursdaycapital/hermes-studio-baby-dashboard/releases/latest)
 
