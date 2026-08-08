@@ -21,5 +21,7 @@ idf_component_register(
         esp_netif
         esp_http_server
         app_update
+        espressif__cjson
         lwip
+        espressif__mdns
 )
