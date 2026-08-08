@@ -262,10 +262,10 @@ static esp_err_t ota_http_handler(httpd_req_t *request)
 static void github_ota_task(void *unused)
 {
     const esp_http_client_config_t http_config = {
-        .url = "https://github.com/thursdaycapital/hermes-studio-baby-dashboard/"
-               "releases/latest/download/quote0_baby.bin",
+        .url = "https://thursdaycapital.github.io/hermes-studio-baby-dashboard/"
+               "firmware/quote0_baby.bin",
         .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = 15000,
+        .timeout_ms = 30000,
         .keep_alive_enable = true,
         .max_redirection_count = 5,
     };

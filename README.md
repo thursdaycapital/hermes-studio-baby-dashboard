@@ -133,8 +133,10 @@ the device after validation. Factory firmware still requires the first full
 USB flash.
 
 The same panel performs a one-tap online update. The device downloads the
-latest `quote0_baby.bin` release asset from this GitHub repository over HTTPS,
-validates it, writes the inactive OTA partition, and reboots.
+latest `quote0_baby.bin` from this repository through GitHub Pages over HTTPS,
+validates it, writes the inactive OTA partition, and reboots. GitHub Pages
+avoids browser CORS and Release redirect failures while keeping GitHub as the
+firmware source.
 
 ## Open source
 
