@@ -1,5 +1,13 @@
 # Quote/0 Baby Dashboard
 
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-5b7f63.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/thursdaycapital/quote0-baby-dashboard)](https://github.com/thursdaycapital/quote0-baby-dashboard/releases)
+
+一个开源、本地优先的 Quote/0 墨水屏宝宝照护看板。手机通过局域网记录
+喂奶、睡眠和尿布，设备同步显示状态、趋势与提醒，不依赖官方云服务。
+
+![Quote/0 宝宝看板实机运行效果](docs/quote0-baby-dashboard.jpg)
+
 Local-first custom firmware for the MindReset Quote/0:
 
 - ESP32-C3, 4 MB flash
@@ -81,6 +89,13 @@ idf.py build
 ```
 
 The project targets ESP32-C3 with a 4 MB dual-OTA partition table.
+
+## Open source
+
+This project is open source under the [Apache License 2.0](LICENSE). Issues,
+improvements, device adaptations, and documentation contributions are welcome.
+
+项目使用 [Apache License 2.0](LICENSE) 开源，欢迎提交问题、改进方案、硬件适配和文档贡献。
 
 ## Local Wi-Fi
 
