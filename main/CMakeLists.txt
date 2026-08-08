@@ -1,0 +1,25 @@
+set(QUOTE0_DRIVER_ROOT
+    "${CMAKE_CURRENT_LIST_DIR}/../vendor/dot_open_platform/devices/quote_0/firmware-resources/display/drivers")
+
+idf_component_register(
+    SRCS
+        "main.c"
+        "baby_network.c"
+        "${QUOTE0_DRIVER_ROOT}/uc8251d_minimal.c"
+    INCLUDE_DIRS
+        "."
+        "${QUOTE0_DRIVER_ROOT}"
+    REQUIRES
+        esp_driver_spi
+        esp_driver_gpio
+        esp_timer
+        esp_driver_usb_serial_jtag
+        nvs_flash
+        vfs
+        esp_wifi
+        esp_event
+        esp_netif
+        esp_http_server
+        app_update
+        lwip
+)

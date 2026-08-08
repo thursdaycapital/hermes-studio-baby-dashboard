@@ -1,0 +1,15 @@
+build/
+sdkconfig
+sdkconfig.old
+*.bin
+*.elf
+*.map
+*.sqlite3
+*.sqlite3-*
+screenlog.*
+__pycache__/
+*.py[cod]
+.DS_Store
+.quote0-token
+.env
+.env.*
