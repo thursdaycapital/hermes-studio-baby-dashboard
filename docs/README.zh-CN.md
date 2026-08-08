@@ -49,7 +49,7 @@ SQLite 数据库中，不需要官方云服务。
 
 ```bash
 git clone --recurse-submodules https://github.com/thursdaycapital/hermes-studio-baby-dashboard.git
-cd quote0-baby-dashboard
+cd hermes-studio-baby-dashboard
 ```
 
 如果已经普通克隆过仓库，请补充下载子模块：
@@ -92,6 +92,10 @@ idf.py -p /dev/cu.usbmodemXXXX flash
 烧录完成后设备会自动重启。首次烧录会写入启动程序、分区表和应用固件，
 不会主动擦除 NVS 数据分区。
 
+> GitHub Release 中单独提供的 `quote0_baby.bin` 是 OTA 应用镜像，不适合
+> 原厂设备第一次安装时单独写入。首次改刷请从源码执行完整的
+> `idf.py flash`。
+
 ## 四、配置家庭 Wi-Fi
 
 没有家庭网络配置时，设备会创建临时热点：
@@ -112,6 +116,20 @@ idf.py -p /dev/cu.usbmodemXXXX flash
 
 ESP32-C3 不支持 5GHz Wi-Fi。如果页面保存后设备始终无法上线，请确认
 路由器已经开启 2.4GHz 网络。
+
+### 没有按键时怎样重新配网
+
+Quote/0 本身没有可用的交互按键，因此恢复配网由固件自动完成：
+
+- 首次启动且没有保存 Wi-Fi 时，立即开启 `Quote0-Baby-XXXX` 热点。
+- 已保存的 Wi-Fi 名称或密码错误时，固件重试连接约 11 次。
+- 多次连接失败后，自动开启同名恢复热点，不需要按键或清空设备。
+- `XXXX` 来自每台设备 MAC 地址末四位，因此不同设备名称不同。
+- 手机连接热点后不会自动弹出门户页面，需要手动打开
+  `http://192.168.4.1`。
+
+保存新的家庭 Wi-Fi 后设备会自动重启。宝宝状态、历史和提醒保存在另一组
+NVS 数据中，重新配网不会主动清除这些记录。
 
 ## 五、打开手机看板
 
@@ -211,7 +229,7 @@ SHOW                    强制刷新墨水屏
 ```text
 名称：quote0-baby
 命令：python3
-参数：/绝对路径/quote0-baby-dashboard/hermes_bridge.py --mcp
+参数：/绝对路径/hermes-studio-baby-dashboard/hermes_bridge.py --mcp
 ```
 
 令牌可以放在项目的 `.quote0-token` 文件中，或者给 MCP Server 设置

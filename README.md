@@ -86,11 +86,13 @@ Clone the display-driver dependency and build with ESP-IDF:
 
 ```bash
 git clone --recurse-submodules https://github.com/thursdaycapital/hermes-studio-baby-dashboard.git
-cd quote0-baby-dashboard
+cd hermes-studio-baby-dashboard
 idf.py build
 ```
 
 The project targets ESP32-C3 with a 4 MB dual-OTA partition table.
+The `quote0_baby.bin` asset from GitHub Releases is an OTA application image;
+use a full `idf.py flash` for the first installation on an original device.
 
 ## Open source
 
@@ -111,4 +113,10 @@ Setup page: http://192.168.4.1
 
 After saving the home Wi-Fi credentials, the device reboots onto the LAN. The
 Hermes bridge discovers it with a UDP broadcast and sends commands to the local
-HTTP API. USB remains an automatic fallback and recovery path.
+HTTP API.
+
+The hardware has no button, so recovery is automatic. If saved Wi-Fi
+credentials cannot connect, the firmware retries about 11 times and then opens
+the same `Quote0-Baby-XXXX` recovery hotspot. Connect to it and manually open
+`http://192.168.4.1` to replace the Wi-Fi settings. ESP32-C3 supports 2.4 GHz
+Wi-Fi only. USB remains an additional recovery path.
