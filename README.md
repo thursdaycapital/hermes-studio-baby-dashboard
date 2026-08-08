@@ -126,6 +126,16 @@ The project targets ESP32-C3 with a 4 MB dual-OTA partition table.
 The `quote0_baby.bin` asset from GitHub Releases is an OTA application image;
 use a full `idf.py flash` for the first installation on an original device.
 
+After this community firmware is installed, open `http://quote0-baby.local/`
+and expand **宝宝社区固件更新** to upload a future `quote0_baby.bin` release
+directly from a phone or computer. The page shows upload progress and reboots
+the device after validation. Factory firmware still requires the first full
+USB flash.
+
+The same panel performs a one-tap online update. The device downloads the
+latest `quote0_baby.bin` release asset from this GitHub repository over HTTPS,
+validates it, writes the inactive OTA partition, and reboots.
+
 ## Open source
 
 This project is open source under the [Apache License 2.0](LICENSE). Issues,

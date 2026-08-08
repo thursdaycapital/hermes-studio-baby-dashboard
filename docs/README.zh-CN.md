@@ -322,6 +322,16 @@ Hermes 可以调用 11 个宝宝记录、状态、统计和提醒工具。它是
 
 ## 九、Wi-Fi OTA 无线升级
 
+打开设备网页 `http://quote0-baby.local/`，展开“宝宝社区固件更新”，选择从本项目
+Release 下载的 `quote0_baby.bin`，再点击“上传并更新固件”。网页会显示上传进度，
+成功后设备自动重启。手机与设备需连接同一个局域网，整个过程不需要数据线。
+
+更简单的方法是点击“从 GitHub 在线更新”。设备会通过 HTTPS 直接下载本仓库最新
+Release 中的 `quote0_baby.bin`，验证固件后写入备用 OTA 分区并自动重启。手机只负责
+启动和显示进度；设备本身必须能通过当前 Wi-Fi 访问互联网。
+
+也可以从命令行升级：
+
 从 [Releases](https://github.com/thursdaycapital/hermes-studio-baby-dashboard/releases)
 下载 `quote0_baby.bin`，然后运行：
 
@@ -338,6 +348,8 @@ OTA 前请确认：
 - `.quote0-token` 正确
 - 固件来自本项目 Release 或由当前源码编译
 - 升级过程中不要切断设备电源
+- 网页 OTA 仅适用于已经安装本社区固件的设备；原厂设备首次安装仍需 USB 完整刷写
+- 不要上传原厂固件、其他设备型号固件或来源不明的 `.bin`
 
 ## 十、数据与隐私
 
