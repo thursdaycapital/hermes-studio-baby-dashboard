@@ -132,11 +132,11 @@ directly from a phone or computer. The page shows upload progress and reboots
 the device after validation. Factory firmware still requires the first full
 USB flash.
 
-The same panel performs a one-tap online update. The device downloads the
-latest `quote0_baby.bin` from this repository through GitHub Pages over HTTPS,
-validates it, writes the inactive OTA partition, and reboots. GitHub Pages
-avoids browser CORS and Release redirect failures while keeping GitHub as the
-firmware source.
+The same panel performs a one-tap online update. The browser downloads the
+latest `quote0_baby.bin` directly from this repository through GitHub's raw
+file endpoint, then relays it to the device. The firmware validates the image,
+writes the inactive OTA partition, and reboots. This avoids Release CORS and
+ESP32-to-GitHub TLS reset failures while keeping GitHub as the source.
 
 ## Open source
 

@@ -20,8 +20,6 @@ idf_component_register(
         esp_event
         esp_netif
         esp_http_server
-        esp_https_ota
-        mbedtls
         app_update
         espressif__cjson
         lwip
