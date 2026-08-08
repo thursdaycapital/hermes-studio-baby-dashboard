@@ -3,7 +3,7 @@
 [中文介绍与使用教程](docs/README.zh-CN.md) | English
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-5b7f63.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/thursdaycapital/quote0-baby-dashboard)](https://github.com/thursdaycapital/quote0-baby-dashboard/releases)
+[![Release](https://img.shields.io/github/v/release/thursdaycapital/hermes-studio-baby-dashboard)](https://github.com/thursdaycapital/hermes-studio-baby-dashboard/releases)
 
 一个开源、本地优先的 Quote/0 墨水屏宝宝照护看板。手机通过局域网记录
 喂奶、睡眠和尿布，设备同步显示状态、趋势与提醒，不依赖官方云服务。
@@ -85,7 +85,7 @@ Alternatively, set `QUOTE0_TOKEN` in the environment.
 Clone the display-driver dependency and build with ESP-IDF:
 
 ```bash
-git clone --recurse-submodules https://github.com/thursdaycapital/quote0-baby-dashboard.git
+git clone --recurse-submodules https://github.com/thursdaycapital/hermes-studio-baby-dashboard.git
 cd quote0-baby-dashboard
 idf.py build
 ```

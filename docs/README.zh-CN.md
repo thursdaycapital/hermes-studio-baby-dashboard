@@ -1,6 +1,6 @@
 # Quote/0 宝宝看板
 
-[返回项目首页](../README.md) | [下载最新固件](https://github.com/thursdaycapital/quote0-baby-dashboard/releases/latest)
+[返回项目首页](../README.md) | [下载最新固件](https://github.com/thursdaycapital/hermes-studio-baby-dashboard/releases/latest)
 
 Quote/0 宝宝看板是一套开源、本地优先的新生儿照护记录工具。它把
 MindReset Quote/0 改造成一块低功耗墨水屏，可以显示宝宝天数、最近喂奶、
@@ -48,7 +48,7 @@ SQLite 数据库中，不需要官方云服务。
 `--recurse-submodules`：
 
 ```bash
-git clone --recurse-submodules https://github.com/thursdaycapital/quote0-baby-dashboard.git
+git clone --recurse-submodules https://github.com/thursdaycapital/hermes-studio-baby-dashboard.git
 cd quote0-baby-dashboard
 ```
 
@@ -234,7 +234,7 @@ Hermes 可以调用 11 个宝宝记录、状态、统计和提醒工具。它是
 
 ## 九、Wi-Fi OTA 无线升级
 
-从 [Releases](https://github.com/thursdaycapital/quote0-baby-dashboard/releases)
+从 [Releases](https://github.com/thursdaycapital/hermes-studio-baby-dashboard/releases)
 下载 `quote0_baby.bin`，然后运行：
 
 ```bash
