@@ -133,8 +133,8 @@ the device after validation. Factory firmware still requires the first full
 USB flash.
 
 The same panel performs a one-tap online update. The browser downloads the
-latest `quote0_baby.bin` directly from this repository through GitHub's raw
-file endpoint, then relays it to the device. The firmware validates the image,
+latest `quote0_baby.bin` directly from this repository through GitHub's
+Contents API, then relays it to the device. The firmware validates the image,
 writes the inactive OTA partition, and reboots. This avoids Release CORS and
 ESP32-to-GitHub TLS reset failures while keeping GitHub as the source.
 
