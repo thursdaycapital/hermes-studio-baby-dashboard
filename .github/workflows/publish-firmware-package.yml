@@ -1,0 +1,55 @@
+name: Publish firmware package
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag containing quote0_baby.bin
+        required: true
+        default: v1.0.0
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Select release
+        id: release
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ -n "$DISPATCH_TAG" ]; then
+            echo "tag=$DISPATCH_TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download firmware asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern quote0_baby.bin
+
+      - name: Install ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Sign in to GitHub Container Registry
+        run: echo "${{ github.token }}" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish OCI firmware package
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          oras push "ghcr.io/${GITHUB_REPOSITORY}:${TAG}" \
+            --artifact-type application/vnd.quote0.firmware \
+            --annotation "org.opencontainers.image.title=Quote/0 Baby Dashboard Firmware" \
+            --annotation "org.opencontainers.image.version=${VERSION}" \
+            --annotation "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            quote0_baby.bin:application/octet-stream
