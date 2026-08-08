@@ -10,6 +10,13 @@
 
 ![Quote/0 宝宝看板实机运行效果](docs/quote0-baby-dashboard.jpg)
 
+### 局域网网页看板 / Local web dashboard
+
+手机或电脑连接同一 Wi-Fi 后，可以记录喂奶、睡眠和尿布，查看历史记录与
+多日趋势，并设置喂奶及疫苗提醒。
+
+![Hermes Studio 宝宝看板网页界面](docs/web-dashboard.webp)
+
 Local-first custom firmware for the MindReset Quote/0:
 
 - ESP32-C3, 4 MB flash
