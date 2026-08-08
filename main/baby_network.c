@@ -9,12 +9,14 @@
 #include "esp_app_desc.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
+#include "esp_https_ota.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
+#include "esp_crt_bundle.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
@@ -51,6 +53,9 @@ static char command_response[2048];
 static char command_escaped[2300];
 static char command_json[2400];
 static char backup_response[6144];
+static volatile bool github_ota_active;
+static volatile int github_ota_progress;
+static const char *volatile github_ota_state = "idle";
 
 static bool request_authorized(httpd_req_t *request)
 {
@@ -168,12 +173,17 @@ static esp_err_t wifi_scan_result_handler(httpd_req_t *request)
 
 #define OTA_CHUNK_SIZE 4096
 #define OTA_RECV_BUF   2048
+#define BABY_OTA_IMAGE_MAGIC 0xE9
 
 static esp_err_t ota_http_handler(httpd_req_t *request)
 {
     if (!request_authorized(request)) {
         httpd_resp_set_status(request, "401 Unauthorized");
         return send_json(request, "{\"error\":\"unauthorized\"}");
+    }
+    if (github_ota_active) {
+        httpd_resp_set_status(request, "409 Conflict");
+        return send_json(request, "{\"error\":\"github_ota_active\"}");
     }
 
     esp_ota_handle_t ota_handle = 0;
@@ -184,7 +194,13 @@ static esp_err_t ota_http_handler(httpd_req_t *request)
         return send_json(request, "{\"error\":\"no_ota_partition\"}");
     }
 
-    esp_err_t err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN,
+    if (request->content_len < 1024 ||
+        request->content_len > (int)update_partition->size) {
+        httpd_resp_set_status(request, "413 Content Too Large");
+        return send_json(request, "{\"error\":\"invalid_firmware_size\"}");
+    }
+
+    esp_err_t err = esp_ota_begin(update_partition, request->content_len,
                                   &ota_handle);
     if (err != ESP_OK) {
         httpd_resp_set_status(request, "500 Internal Server Error");
@@ -204,6 +220,12 @@ static esp_err_t ota_http_handler(httpd_req_t *request)
         if (received <= 0) {
             if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
             failed = true;
+            break;
+        }
+        if (received_total == 0 &&
+            (unsigned char)buffer[0] != BABY_OTA_IMAGE_MAGIC) {
+            failed = true;
+            err = ESP_ERR_INVALID_ARG;
             break;
         }
         err = esp_ota_write(ota_handle, buffer, received);
@@ -237,9 +259,109 @@ static esp_err_t ota_http_handler(httpd_req_t *request)
     return ESP_OK;
 }
 
+static void github_ota_task(void *unused)
+{
+    const esp_http_client_config_t http_config = {
+        .url = "https://github.com/thursdaycapital/hermes-studio-baby-dashboard/"
+               "releases/latest/download/quote0_baby.bin",
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 15000,
+        .keep_alive_enable = true,
+        .max_redirection_count = 5,
+    };
+    const esp_https_ota_config_t ota_config = {
+        .http_config = &http_config,
+    };
+    esp_https_ota_handle_t handle = NULL;
+    github_ota_state = "connecting";
+    esp_err_t err = esp_https_ota_begin(&ota_config, &handle);
+    if (err != ESP_OK) {
+        github_ota_state = "connect_failed";
+        github_ota_active = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    github_ota_state = "downloading";
+    while ((err = esp_https_ota_perform(handle)) ==
+           ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+        int size = esp_https_ota_get_image_size(handle);
+        int read = esp_https_ota_get_image_len_read(handle);
+        if (size > 0 && read >= 0) {
+            int progress = (read * 100) / size;
+            github_ota_progress = progress > 99 ? 99 : progress;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
+    if (err != ESP_OK || !esp_https_ota_is_complete_data_received(handle)) {
+        esp_https_ota_abort(handle);
+        github_ota_state = "download_failed";
+        github_ota_active = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    err = esp_https_ota_finish(handle);
+    if (err != ESP_OK) {
+        github_ota_state = "validation_failed";
+        github_ota_active = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    github_ota_progress = 100;
+    github_ota_state = "rebooting";
+    vTaskDelay(pdMS_TO_TICKS(1200));
+    esp_restart();
+}
+
+static esp_err_t github_ota_start_handler(httpd_req_t *request)
+{
+    if (!request_authorized(request)) {
+        httpd_resp_set_status(request, "401 Unauthorized");
+        return send_json(request, "{\"error\":\"unauthorized\"}");
+    }
+    if (github_ota_active) {
+        httpd_resp_set_status(request, "409 Conflict");
+        return send_json(request, "{\"error\":\"ota_active\"}");
+    }
+    github_ota_active = true;
+    github_ota_progress = 0;
+    github_ota_state = "starting";
+    if (xTaskCreate(github_ota_task, "github_ota", 10240, NULL, 4, NULL) !=
+        pdPASS) {
+        github_ota_active = false;
+        github_ota_state = "task_failed";
+        httpd_resp_set_status(request, "503 Service Unavailable");
+        return send_json(request, "{\"error\":\"task_failed\"}");
+    }
+    return send_json(request, "{\"ok\":true,\"started\":true}");
+}
+
+static esp_err_t github_ota_status_handler(httpd_req_t *request)
+{
+    if (!request_authorized(request)) {
+        httpd_resp_set_status(request, "401 Unauthorized");
+        return send_json(request, "{\"error\":\"unauthorized\"}");
+    }
+    char body[128];
+    snprintf(body, sizeof(body),
+             "{\"active\":%s,\"state\":\"%s\",\"progress\":%d}",
+             github_ota_active ? "true" : "false",
+             (const char *)github_ota_state, github_ota_progress);
+    return send_json(request, body);
+}
+
 static esp_err_t ping_handler(httpd_req_t *request)
 {
-    return send_json(request, "{\"device\":\"QUOTE0_BABY\",\"version\":4}");
+    char body[160];
+    const esp_app_desc_t *app = esp_app_get_description();
+    snprintf(body, sizeof(body),
+             "{\"device\":\"QUOTE0_BABY\",\"api_version\":4,"
+             "\"firmware_version\":\"%s\",\"project\":\"%s\"}",
+             app->version, app->project_name);
+    return send_json(request, body);
 }
 
 static esp_err_t command_http_handler(httpd_req_t *request)
@@ -515,7 +637,7 @@ static esp_err_t wifi_config_handler(httpd_req_t *request)
 
 static esp_err_t root_handler(httpd_req_t *request)
 {
-    static char page[24000];
+    static char page[28000];
     snprintf(page, sizeof(page),
         "<!doctype html><html lang=zh-CN><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -625,6 +747,10 @@ static esp_err_t root_handler(httpd_req_t *request)
         ".backup-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}"
         ".backup-actions .btn{margin:0}.hint{font-size:12px;line-height:1.7;color:#6d826f;"
         "margin-top:10px}"
+        ".ota-file{border:1px dashed #9db49a;padding:12px;background:#f2f5e8}"
+        ".progress{height:10px;border-radius:999px;background:#dce6d7;overflow:hidden;"
+        "margin:4px 0 10px}.progress>i{display:block;width:0;height:100%%;background:#64869a;"
+        "transition:width .2s}.ota-state{font-size:12px;color:#637c67;margin-bottom:8px}"
         "@media(max-width:820px){body{padding:12px}header{height:58px;margin-bottom:10px}"
         "h1{font-size:20px;letter-spacing:0}header:after{display:none}"
         ".logo{width:44px;height:44px;flex-basis:44px}"
@@ -700,7 +826,17 @@ static esp_err_t root_handler(httpd_req_t *request)
         "⬆️ 恢复备份</button></div>"
         "<input id=restoreFile type=file accept='.json,application/json' style='display:none'>"
         "<p class=hint>备份包含当前状态、喂奶间隔与最近 32 条记录。恢复前会完整校验文件，"
-        "成功后自动刷新墨水屏。</p></div></details></section></main>"
+        "成功后自动刷新墨水屏。</p></div></details>"
+        "<details class=card><summary class=fold>宝宝社区固件更新</summary><div>"
+        "<p class=minilabel>当前版本：<b id=fwver>读取中...</b>。仅上传本项目 Release 提供的 "
+        "<code>quote0_baby.bin</code>，升级时请保持设备供电。</p>"
+        "<input class=ota-file id=otaFile type=file accept='.bin,application/octet-stream'>"
+        "<div class=progress><i id=otaBar></i></div><div class=ota-state id=otaState>等待选择固件</div>"
+        "<button class='btn t' id=onlineButton onclick='checkCommunityUpdate()'>🌿 从 GitHub 在线更新</button>"
+        "<button class='btn b' id=otaButton onclick='uploadFirmware()'>⬆️ 上传并更新固件</button>"
+        "<p class=hint>在线更新由设备直接下载本项目最新 GitHub Release。成功后设备自动"
+        "重启，宝宝记录保留在设备中。请勿上传原厂固件、"
+        "其他型号固件或中途断电。</p></div></details></section></main>"
         "</div><div id=toast></div><script>"
         "const token='%s';"
         "function now(){return new Date().toTimeString().slice(0,5)}"
@@ -817,9 +953,52 @@ static esp_err_t root_handler(httpd_req_t *request)
         "if(!r.ok||!j.ok)throw Error(j.message||'恢复失败');toast('✅ '+j.message);"
         "lastStatus='';await refresh();await loadHist();await loadChart()}catch(err){toast(err.message||'恢复失败',1)}"
         "e.target.value=''};"
+        "async function loadFirmwareVersion(){try{const r=await fetch('/api/ping'),j=await r.json();"
+        "document.getElementById('fwver').textContent=j.firmware_version||'未知版本'}catch(e){"
+        "document.getElementById('fwver').textContent='读取失败'}}"
+        "async function checkCommunityUpdate(){const button=document.getElementById('onlineButton'),"
+        "state=document.getElementById('otaState'),bar=document.getElementById('otaBar');"
+        "if(!confirm('确定让设备直接从 GitHub 安装最新社区固件吗？更新期间请勿断电。'))return;"
+        "button.disabled=true;document.getElementById('otaButton').disabled=true;"
+        "state.textContent='设备正在连接 GitHub…';bar.style.width='2%%';"
+        "try{const r=await fetch('/api/ota/github?token='+token,{method:'POST'});if(!r.ok)throw Error();"
+        "pollCommunityUpdate()}catch(e){button.disabled=false;document.getElementById('otaButton').disabled=false;"
+        "state.textContent='无法启动在线更新';toast('在线更新启动失败',1)}}"
+        "async function pollCommunityUpdate(){const button=document.getElementById('onlineButton'),"
+        "manual=document.getElementById('otaButton'),state=document.getElementById('otaState'),"
+        "bar=document.getElementById('otaBar'),names={starting:'准备更新…',connecting:'正在连接 GitHub…',"
+        "downloading:'正在从 GitHub 下载并校验…',rebooting:'更新成功，设备正在重启…'};"
+        "try{const r=await fetch('/api/ota/github/status?token='+token),j=await r.json();"
+        "bar.style.width=Math.max(2,j.progress||0)+'%%';state.textContent=names[j.state]||('更新失败：'+j.state);"
+        "if(j.state==='rebooting'){bar.style.width='100%%';toast('✅ 在线更新成功');"
+        "setTimeout(()=>location.reload(),14000);return}if(j.active){setTimeout(pollCommunityUpdate,1000);return}"
+        "button.disabled=false;manual.disabled=false;toast('在线更新失败',1)}catch(e){"
+        "if(state.textContent.includes('重启'))return;setTimeout(pollCommunityUpdate,1800)}}"
+        "function uploadFirmware(){const file=document.getElementById('otaFile').files[0];"
+        "if(!file){toast('请先选择 .bin 固件',1);return}startFirmwareUpload(file,file.name)}"
+        "function startFirmwareUpload(file,fileName){const "
+        "button=document.getElementById('otaButton'),bar=document.getElementById('otaBar'),"
+        "state=document.getElementById('otaState');"
+        "if(!fileName.toLowerCase().endsWith('.bin')){toast('只能上传 .bin 固件',1);return}"
+        "if(file.size<1024||file.size>1048576){toast('固件大小不正确',1);return}"
+        "if(!confirm('确定更新到 '+fileName+' 吗？上传和重启期间请勿断电。'))return;"
+        "button.disabled=true;document.getElementById('onlineButton').disabled=true;"
+        "bar.style.width='0%%';state.textContent='正在上传 0%%';"
+        "const x=new XMLHttpRequest();x.open('POST','/api/ota?token='+token);"
+        "x.setRequestHeader('Content-Type','application/octet-stream');"
+        "x.upload.onprogress=e=>{if(e.lengthComputable){const p=Math.round(e.loaded/e.total*100);"
+        "bar.style.width=p+'%%';state.textContent='正在上传 '+p+'%%'}};"
+        "x.onload=()=>{if(x.status>=200&&x.status<300){bar.style.width='100%%';"
+        "state.textContent='更新成功，设备正在重启…';toast('✅ 更新成功，正在重启');"
+        "setTimeout(()=>location.reload(),12000)}else{button.disabled=false;"
+        "document.getElementById('onlineButton').disabled=false;"
+        "state.textContent='更新失败，请确认固件文件';toast('固件更新失败',1)}};"
+        "x.onerror=()=>{button.disabled=false;document.getElementById('onlineButton').disabled=false;"
+        "state.textContent='连接中断，请等待设备状态恢复';"
+        "toast('上传连接中断',1)};x.send(file)}"
         "if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});"
         "document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});"
-        "async function syncAll(){await refresh();await loadChart();await loadHist()}syncAll();"
+        "async function syncAll(){loadFirmwareVersion();await refresh();await loadChart();await loadHist()}syncAll();"
         "setInterval(()=>{if(!document.hidden)refresh()},4000);"
         "setInterval(loadChart,60000);"
         "</script></body></html>",
@@ -833,7 +1012,7 @@ static httpd_handle_t start_http_server(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
-    config.max_uri_handlers = 14;
+    config.max_uri_handlers = 16;
     config.max_open_sockets = 4;
     config.lru_purge_enable = true;
     httpd_handle_t server = NULL;
@@ -857,6 +1036,12 @@ static httpd_handle_t start_http_server(void)
         .handler = wifi_scan_result_handler};
     const httpd_uri_t ota = {
         .uri = "/api/ota", .method = HTTP_POST, .handler = ota_http_handler};
+    const httpd_uri_t github_ota = {
+        .uri = "/api/ota/github", .method = HTTP_POST,
+        .handler = github_ota_start_handler};
+    const httpd_uri_t github_ota_status = {
+        .uri = "/api/ota/github/status", .method = HTTP_GET,
+        .handler = github_ota_status_handler};
     const httpd_uri_t backup = {
         .uri = "/api/backup", .method = HTTP_GET,
         .handler = backup_export_http_handler};
@@ -880,6 +1065,8 @@ static httpd_handle_t start_http_server(void)
     httpd_register_uri_handler(server, &wifiscan);
     httpd_register_uri_handler(server, &wifiscanresult);
     httpd_register_uri_handler(server, &ota);
+    httpd_register_uri_handler(server, &github_ota);
+    httpd_register_uri_handler(server, &github_ota_status);
     httpd_register_uri_handler(server, &backup);
     httpd_register_uri_handler(server, &restore);
     httpd_register_uri_handler(server, &manifest);
