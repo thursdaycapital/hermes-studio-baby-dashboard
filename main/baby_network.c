@@ -77,6 +77,9 @@ static esp_err_t send_json(httpd_req_t *request, const char *body)
 /* 扫描结果缓存（一次性后台任务填充，前端轮询读取） */
 static char scan_cache[2048] = "{\"networks\":[]}";
 static volatile bool scan_done = true;
+/* The scan task has a 4 KB stack. Keep AP records and JSON off that stack. */
+static wifi_ap_record_t scan_records[20];
+static char scan_body[2048];
 
 static void wifi_scan_task(void *unused)
 {
@@ -88,37 +91,38 @@ static void wifi_scan_task(void *unused)
         .scan_type = WIFI_SCAN_TYPE_ACTIVE,
         .scan_time = {.active = {.min = 100, .max = 150}},
     };
-    scan_done = false;
     esp_err_t err = esp_wifi_scan_start(&scan_config, true);
     uint16_t count = 0;
     if (err == ESP_OK) {
         esp_wifi_scan_get_ap_num(&count);
         if (count > 20) count = 20;
-        wifi_ap_record_t records[20];
-        memset(records, 0, sizeof(records));
+        memset(scan_records, 0, sizeof(scan_records));
         if (count > 0) {
-            esp_wifi_scan_get_ap_records(&count, records);
+            esp_wifi_scan_get_ap_records(&count, scan_records);
         }
-        char body[2048];
-        int written = snprintf(body, sizeof(body), "{\"networks\":[");
-        for (uint16_t i = 0; i < count && written < (int)sizeof(body) - 32; i++) {
+        int written = snprintf(scan_body, sizeof(scan_body),
+                               "{\"networks\":[");
+        for (uint16_t i = 0;
+             i < count && written < (int)sizeof(scan_body) - 32; i++) {
             char ssid_esc[40] = {0};
-            int len = strnlen((char *)records[i].ssid, 32);
+            int len = strnlen((char *)scan_records[i].ssid, 32);
             for (int c = 0; c < len && c < 38; c++) {
-                if (records[i].ssid[c] == '\\' || records[i].ssid[c] == '"') {
+                if (scan_records[i].ssid[c] == '\\' ||
+                    scan_records[i].ssid[c] == '"') {
                     ssid_esc[c] = ' ';
                 } else {
-                    ssid_esc[c] = (char)records[i].ssid[c];
+                    ssid_esc[c] = (char)scan_records[i].ssid[c];
                 }
             }
-            int rssi = records[i].rssi;
-            written += snprintf(body + written, sizeof(body) - written,
+            int rssi = scan_records[i].rssi;
+            written += snprintf(scan_body + written,
+                                sizeof(scan_body) - written,
                                 "%s{\"ssid\":\"%s\",\"rssi\":%d,\"auth\":%d}",
                                 i ? "," : "", ssid_esc, rssi,
-                                (int)records[i].authmode);
+                                (int)scan_records[i].authmode);
         }
-        snprintf(body + written, sizeof(body) - written, "]}");
-        snprintf(scan_cache, sizeof(scan_cache), "%s", body);
+        snprintf(scan_body + written, sizeof(scan_body) - written, "]}");
+        snprintf(scan_cache, sizeof(scan_cache), "%s", scan_body);
     } else {
         snprintf(scan_cache, sizeof(scan_cache),
                  "{\"networks\":[],\"error\":\"scan_failed\"}");
@@ -134,7 +138,13 @@ static esp_err_t wifi_scan_handler(httpd_req_t *request)
         return send_json(request, "{\"error\":\"unauthorized\"}");
     }
     if (scan_done) {
-        xTaskCreate(wifi_scan_task, "wifi_scan", 4096, NULL, 3, NULL);
+        scan_done = false;
+        if (xTaskCreate(wifi_scan_task, "wifi_scan", 4096,
+                        NULL, 3, NULL) != pdPASS) {
+            scan_done = true;
+            httpd_resp_set_status(request, "503 Service Unavailable");
+            return send_json(request, "{\"error\":\"scan_task_failed\"}");
+        }
     }
     return send_json(request, "{\"scanning\":true}");
 }
